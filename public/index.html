@@ -1,0 +1,189 @@
+﻿<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>单词背诵打卡工作台 (含拍照打卡)</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+</head>
+<body class="bg-slate-950 text-slate-100 min-h-screen p-6 font-sans">
+
+    <!-- 顶部角色切换 -->
+    <div class="max-w-4xl mx-auto flex justify-between items-center mb-6 bg-slate-900 p-4 rounded-xl border border-slate-800">
+        <h1 class="font-bold text-lg text-indigo-400">单词双端协同工作台</h1>
+        <div class="space-x-2">
+            <button id="btn-stu" onclick="setRole('student')" class="px-4 py-2 bg-indigo-600 rounded-lg text-sm font-bold">切换到：学生端</button>
+            <button id="btn-par" onclick="setRole('parent')" class="px-4 py-2 bg-slate-800 text-slate-400 rounded-lg text-sm font-bold">切换到：家长端</button>
+        </div>
+    </div>
+
+    <div class="max-w-4xl mx-auto">
+        <!-- ================= 学生端界面 ================= -->
+        <div id="student-view" class="bg-slate-900 p-8 rounded-2xl border border-slate-800 text-center space-y-6">
+            <h2 class="text-xs text-slate-400 uppercase tracking-widest">学生背词卡片</h2>
+            <div id="word-display" class="text-4xl font-extrabold text-white">resilient</div>
+            <div id="meaning-display" class="text-indigo-400">adj. 有强韧适应力的；快速恢复的</div>
+            
+            <div class="flex justify-center gap-4">
+                <button onclick="nextWord('不认识')" class="px-6 py-3 bg-red-500/20 text-red-400 border border-red-500/30 rounded-xl font-bold">不认识</button>
+                <button onclick="nextWord('掌握')" class="px-6 py-3 bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 rounded-xl font-bold">掌握 (下一个)</button>
+            </div>
+
+            <hr class="border-slate-800">
+
+            <!-- 拍照打卡区域 -->
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 text-left space-y-3">
+                <label class="block text-sm font-bold text-slate-300">📸 拍照打卡（上传书桌/学习照片）：</label>
+                <input type="file" id="photo-input" accept="image/*" capture="environment" onchange="previewPhoto(event)" class="text-xs text-slate-400 file:mr-4 file:py-2 file:px-4 file:rounded-lg file:border-0 file:text-xs file:font-semibold file:bg-indigo-600 file:text-white hover:file:bg-indigo-500 cursor-pointer">
+                
+                <!-- 拍照预览图 -->
+                <div id="photo-preview-box" class="hidden mt-2">
+                    <p class="text-xs text-slate-500 mb-1">打卡照片预览：</p>
+                    <img id="photo-preview" class="h-32 rounded-lg border border-slate-700 object-cover">
+                </div>
+            </div>
+
+            <button onclick="doCheckIn()" class="w-full py-4 bg-gradient-to-r from-indigo-600 to-purple-600 rounded-xl font-extrabold text-white text-lg shadow-lg hover:opacity-90 transition">
+                🚀 提交今日打卡并发送至家长端
+            </button>
+        </div>
+
+        <!-- ================= 家长端界面 ================= -->
+        <div id="parent-view" class="bg-slate-900 p-8 rounded-2xl border border-slate-800 space-y-6 hidden">
+            <div class="flex justify-between items-center">
+                <h2 class="text-lg font-bold text-white">家长实时监督看板</h2>
+                <span id="status-badge" class="px-3 py-1 bg-slate-800 text-slate-400 text-xs rounded-full border border-slate-700">等待学生打卡</span>
+            </div>
+
+            <!-- 实时日志与打卡照片展示 -->
+            <div class="bg-slate-950 p-4 rounded-xl border border-slate-800 space-y-4">
+                <h3 class="text-xs text-slate-500">实时广播与打卡记录：</h3>
+                <div id="log-box" class="space-y-3 h-64 overflow-y-auto font-mono text-xs">
+                    <div class="text-slate-600">[系统] 正在监听学生端动作...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        let ws;
+        let role = 'student';
+        let count = 0;
+        let photoBase64 = null; // 存储压缩后的图片 Base64
+
+        const words = [
+            { w: 'resilient', m: 'adj. 有强韧适应力的；快速恢复的' },
+            { w: 'ambiguous', m: 'adj. 模棱两可的；含糊不清的' },
+            { w: 'pragmatic', m: 'adj. 务实的；注重实效的' }
+        ];
+
+        function connect() {
+            ws = new WebSocket(`ws://${window.location.host}`);
+            
+            ws.onmessage = (event) => {
+                const data = JSON.parse(event.data);
+                const logBox = document.getElementById('log-box');
+                const logItem = document.createElement('div');
+
+                if (data.type === 'CARD_PROGRESS') {
+                    logItem.innerText = `[刷词] 学生划词: "${data.word}" (${data.action})`;
+                    logItem.className = "text-slate-400 border-b border-slate-900 pb-1";
+                    logBox.appendChild(logItem);
+                }
+
+                if (data.type === 'SUBMIT_CHECKIN') {
+                    document.getElementById('status-badge').className = "px-3 py-1 bg-emerald-500/20 text-emerald-400 text-xs rounded-full border border-emerald-500/30 font-bold";
+                    document.getElementById('status-badge').innerText = "今日已打卡 ✓";
+
+                    let photoHTML = '';
+                    if (data.photo) {
+                        photoHTML = `<div class="mt-2"><p class="text-xs text-slate-400 mb-1">📸 学生提交的打卡拍照：</p><img src="${data.photo}" class="h-40 rounded-lg border border-slate-700 object-cover"></div>`;
+                    }
+
+                    logItem.innerHTML = `
+                        <div class="text-emerald-400 font-bold bg-emerald-950/50 p-3 rounded-xl border border-emerald-500/30 my-2">
+                            <div>🎉 [打卡成功] 学生已完成打卡！今天背词: ${data.total} 个！</div>
+                            ${photoHTML}
+                        </div>
+                    `;
+                    logBox.appendChild(logItem);
+                }
+                logBox.scrollTop = logBox.scrollHeight;
+            };
+        }
+
+        // 本地拍照/选中图片预览与压缩处理
+        function previewPhoto(event) {
+            const file = event.target.files[0];
+            if (file) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    // 压缩图片防止 WebSocket 数据过大
+                    const img = new Image();
+                    img.src = e.target.result;
+                    img.onload = function() {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        const maxWidth = 600; // 限制最大宽度
+                        const scale = maxWidth / img.width;
+                        canvas.width = maxWidth;
+                        canvas.height = img.height * scale;
+
+                        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+                        photoBase64 = canvas.toDataURL('image/jpeg', 0.7); // 导出压缩图
+
+                        // 页面显示预览
+                        document.getElementById('photo-preview').src = photoBase64;
+                        document.getElementById('photo-preview-box').classList.remove('hidden');
+                    };
+                };
+                reader.readAsDataURL(file);
+            }
+        }
+
+        function setRole(r) {
+            role = r;
+            if (r === 'student') {
+                document.getElementById('student-view').classList.remove('hidden');
+                document.getElementById('parent-view').classList.add('hidden');
+                document.getElementById('btn-stu').className = "px-4 py-2 bg-indigo-600 rounded-lg text-sm font-bold text-white";
+                document.getElementById('btn-par').className = "px-4 py-2 bg-slate-800 text-slate-400 rounded-lg text-sm font-bold";
+            } else {
+                document.getElementById('student-view').classList.add('hidden');
+                document.getElementById('parent-view').classList.remove('hidden');
+                document.getElementById('btn-par').className = "px-4 py-2 bg-indigo-600 rounded-lg text-sm font-bold text-white";
+                document.getElementById('btn-stu').className = "px-4 py-2 bg-slate-800 text-slate-400 rounded-lg text-sm font-bold";
+            }
+        }
+
+        function nextWord(action) {
+            count++;
+            const obj = words[count % words.length];
+            document.getElementById('word-display').innerText = obj.w;
+            document.getElementById('meaning-display').innerText = obj.m;
+
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify({ type: 'CARD_PROGRESS', word: obj.w, action: action }));
+            }
+        }
+
+        function doCheckIn() {
+            if (count === 0) {
+                alert('请先背诵至少一个单词后再提交打卡！');
+                return;
+            }
+
+            if (ws && ws.readyState === 1) {
+                ws.send(JSON.stringify({ 
+                    type: 'SUBMIT_CHECKIN', 
+                    total: count,
+                    photo: photoBase64 // 同步发送照片给家长
+                }));
+                alert("打卡成功！包含照片的打卡信息已实时发送至家长端。");
+            }
+        }
+
+        window.onload = connect;
+    </script>
+</body>
+</html>
